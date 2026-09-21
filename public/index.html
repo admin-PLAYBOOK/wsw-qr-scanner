@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>WSW Check-in</title>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root {
+    --ink: #f2efe9;
+    --ink-dim: #a8a39a;
+    --ground: #17181a;
+    --panel: #1f2123;
+    --line: #2c2e30;
+    --go: #3ecf8e;
+    --go-dim: #14352a;
+    --stop: #ef6a5f;
+    --stop-dim: #3a1e1c;
+    --warn: #e8b64f;
+    --warn-dim: #3a2f14;
+    --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+  }
+
+  header {
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+  }
+
+  header h1 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: 0.01em;
+  }
+
+  header .tally {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--ink-dim);
+  }
+
+  header .tally b { color: var(--ink); font-weight: 600; }
+
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    max-width: 560px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 16px;
+    gap: 16px;
+  }
+
+  #reader-wrap {
+    position: relative;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #000;
+    aspect-ratio: 1 / 1;
+    border: 1px solid var(--line);
+  }
+
+  #reader { width: 100%; height: 100%; }
+  #reader video { object-fit: cover; }
+
+  /* html5-qrcode injects its own UI chrome (borders, buttons); simplify it */
+  #reader img { display: none; }
+  #reader__scan_region { background: transparent !important; }
+  #reader__dashboard { background: var(--panel) !important; color: var(--ink) !important; border: none !important; padding: 8px !important; }
+  #reader__dashboard button {
+    background: var(--line) !important; color: var(--ink) !important; border: none !important;
+    border-radius: 8px !important; padding: 8px 12px !important; font-family: var(--sans) !important;
+  }
+  #reader__dashboard select { border-radius: 8px !important; }
+  #reader__filescan_input { display: none !important; }
+  #reader__dashboard_section_csr span { display: none; }
+
+  .paused-note {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.55);
+    font-size: 14px;
+    color: var(--ink-dim);
+    text-align: center;
+    padding: 20px;
+  }
+  .paused-note.show { display: flex; }
+
+  #result {
+    border-radius: 14px;
+    padding: 20px;
+    min-height: 132px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    transition: background-color 120ms ease, border-color 120ms ease;
+  }
+
+  #result.go { background: var(--go-dim); border-color: var(--go); }
+  #result.stop { background: var(--stop-dim); border-color: var(--stop); }
+  #result.warn { background: var(--warn-dim); border-color: var(--warn); }
+
+  #result .status-line {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  #result.go .status-line { color: var(--go); }
+  #result.stop .status-line { color: var(--stop); }
+  #result.warn .status-line { color: var(--warn); }
+
+  #result .name { font-size: 17px; color: var(--ink); }
+  #result .detail { font-size: 13px; color: var(--ink-dim); font-family: var(--mono); }
+  #result .idle { font-size: 14px; color: var(--ink-dim); }
+
+  #log-toggle {
+    background: none;
+    border: none;
+    color: var(--ink-dim);
+    font-size: 13px;
+    font-family: var(--sans);
+    text-align: left;
+    padding: 4px 2px;
+    cursor: pointer;
+  }
+  #log-toggle:focus-visible { outline: 2px solid var(--go); outline-offset: 2px; }
+
+  #log {
+    display: none;
+    flex-direction: column;
+    gap: 1px;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+  }
+  #log.show { display: flex; }
+
+  .log-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--panel);
+    font-size: 13px;
+  }
+  .log-row .who { color: var(--ink); }
+  .log-row .when { color: var(--ink-dim); font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  .log-row.stop .who { color: var(--stop); }
+  .log-row.go .who { color: var(--go); }
+
+  button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--go); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #result { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>WSW Check-in</h1>
+  <div class="tally">Checked in today: <b id="tally-count">0</b></div>
+</header>
+
+<main>
+  <div id="reader-wrap">
+    <div id="reader"></div>
+    <div class="paused-note" id="paused-note">Tap to scan the next ticket</div>
+  </div>
+
+  <div id="result">
+    <div class="idle">Point the camera at a ticket's QR code to check someone in.</div>
+  </div>
+
+  <button id="log-toggle" aria-expanded="false">Show recent scans ▾</button>
+  <div id="log"></div>
+</main>
+
+<script>
+(function () {
+  const resultEl = document.getElementById('result');
+  const pausedNote = document.getElementById('paused-note');
+  const tallyEl = document.getElementById('tally-count');
+  const logEl = document.getElementById('log');
+  const logToggle = document.getElementById('log-toggle');
+
+  let checkedInToday = 0;
+  let busy = false;
+  let resumeTimer = null;
+
+  logToggle.addEventListener('click', () => {
+    const open = logEl.classList.toggle('show');
+    logToggle.setAttribute('aria-expanded', String(open));
+    logToggle.textContent = open ? 'Hide recent scans ▴' : 'Show recent scans ▾';
+  });
+
+  function setResult(state, statusLine, name, detail) {
+    resultEl.className = state ? state : '';
+    resultEl.innerHTML = '';
+
+    const status = document.createElement('div');
+    status.className = 'status-line';
+    status.textContent = statusLine;
+    resultEl.appendChild(status);
+
+    if (name) {
+      const nameEl = document.createElement('div');
+      nameEl.className = 'name';
+      nameEl.textContent = name;
+      resultEl.appendChild(nameEl);
+    }
+
+    if (detail) {
+      const detailEl = document.createElement('div');
+      detailEl.className = 'detail';
+      detailEl.textContent = detail;
+      resultEl.appendChild(detailEl);
+    }
+  }
+
+  function addLogRow(state, who, when) {
+    const row = document.createElement('div');
+    row.className = 'log-row ' + (state === 'go' ? 'go' : 'stop');
+    const whoEl = document.createElement('span');
+    whoEl.className = 'who';
+    whoEl.textContent = who;
+    const whenEl = document.createElement('span');
+    whenEl.className = 'when';
+    whenEl.textContent = when;
+    row.appendChild(whoEl);
+    row.appendChild(whenEl);
+    logEl.prepend(row);
+    while (logEl.children.length > 20) logEl.removeChild(logEl.lastChild);
+  }
+
+  function timeNow() {
+    return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  async function handleCode(code) {
+    if (busy) return;
+    busy = true;
+    if (navigator.vibrate) navigator.vibrate(15);
+    setResult('', 'Checking…', code, '');
+
+    try {
+      const res = await fetch('/api/checkin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json();
+
+      if (data.ok && data.ticket) {
+        const t = data.ticket;
+        const already = t.checkInCount > 1;
+        const name = t.attendeeName || t.attendeeEmail || 'Ticket holder';
+
+        if (already) {
+          setResult('warn', 'Already checked in', name,
+            t.latestCheckIn ? 'First scanned ' + new Date(t.latestCheckIn.checkedInAt).toLocaleTimeString() : '');
+          addLogRow('warn', name + ' (dup)', timeNow());
+        } else {
+          setResult('go', 'Welcome', name, t.ticketTypeId || '');
+          checkedInToday += 1;
+          tallyEl.textContent = String(checkedInToday);
+          addLogRow('go', name, timeNow());
+        }
+      } else {
+        setResult('stop', 'Not valid', '', data.message || 'This code could not be validated.');
+        addLogRow('stop', data.message || 'Invalid code', timeNow());
+      }
+    } catch (err) {
+      setResult('stop', 'Connection error', '', 'Could not reach the check-in server.');
+    }
+
+    pausedNote.classList.add('show');
+    resumeTimer = setTimeout(resumeScanning, 2200);
+  }
+
+  function resumeScanning() {
+    clearTimeout(resumeTimer);
+    pausedNote.classList.remove('show');
+    busy = false;
+  }
+
+  pausedNote.addEventListener('click', resumeScanning);
+
+  const qr = new Html5Qrcode('reader');
+  const config = { fps: 10, qrbox: { width: 240, height: 240 } };
+
+  Html5Qrcode.getCameras().then((cameras) => {
+    if (!cameras || !cameras.length) {
+      setResult('stop', 'No camera found', '', 'Connect a camera or open this page on a phone.');
+      return;
+    }
+    // Prefer a back/environment camera on phones.
+    const back = cameras.find((c) => /back|rear|environment/i.test(c.label)) || cameras[cameras.length - 1];
+    qr.start(
+      back.id,
+      config,
+      (decodedText) => { if (!busy) handleCode(decodedText); },
+      () => {} // ignore per-frame "no QR found" noise
+    ).catch((err) => {
+      setResult('stop', 'Camera error', '', String(err));
+    });
+  }).catch((err) => {
+    setResult('stop', 'Camera permission needed', '', 'Allow camera access and reload the page.');
+  });
+})();
+</script>
+
+</body>
+</html>
