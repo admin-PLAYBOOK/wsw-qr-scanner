@@ -6,6 +6,7 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -84,12 +85,15 @@ async function initStorage() {
         name TEXT,
         email TEXT,
         category TEXT,
-        checked_in_at TIMESTAMPTZ
+        checked_in_at TIMESTAMPTZ,
+        roster_entry_id TEXT
       )
     `);
+    await pool.query(`ALTER TABLE checkins ADD COLUMN IF NOT EXISTS roster_entry_id TEXT`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS roster (
         id SERIAL PRIMARY KEY,
+        entry_id TEXT UNIQUE,
         category TEXT NOT NULL,
         name TEXT,
         email TEXT,
@@ -97,8 +101,9 @@ async function initStorage() {
         order_id TEXT
       )
     `);
+    await pool.query(`ALTER TABLE roster ADD COLUMN IF NOT EXISTS entry_id TEXT`);
 
-    const checkinsRes = await pool.query('SELECT ticket_id, name, email, category, checked_in_at FROM checkins');
+    const checkinsRes = await pool.query('SELECT ticket_id, name, email, category, checked_in_at, roster_entry_id FROM checkins');
     checkedIn = {};
     for (const row of checkinsRes.rows) {
       checkedIn[row.ticket_id] = {
@@ -106,12 +111,13 @@ async function initStorage() {
         email: row.email,
         category: row.category,
         checkedInAt: row.checked_in_at ? new Date(row.checked_in_at).toISOString() : new Date().toISOString(),
+        rosterEntryId: row.roster_entry_id || null,
       };
     }
 
-    const rosterRes = await pool.query('SELECT category, name, email, code, order_id FROM roster');
+    const rosterRes = await pool.query('SELECT entry_id, category, name, email, code, order_id FROM roster');
     roster.entries = rosterRes.rows.map((r) => ({
-      category: r.category, name: r.name, email: r.email, code: r.code, orderId: r.order_id,
+      entryId: r.entry_id, category: r.category, name: r.name, email: r.email, code: r.code, orderId: r.order_id,
     }));
 
     console.log(`Storage: Postgres. Loaded ${Object.keys(checkedIn).length} check-ins, ${roster.entries.length} roster entries.`);
@@ -127,10 +133,10 @@ async function persistCheckIn(ticketId, record) {
   checkedIn[ticketId] = record; // memory updates instantly regardless of backend
   if (useDb) {
     await pool.query(
-      `INSERT INTO checkins (ticket_id, name, email, category, checked_in_at)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO checkins (ticket_id, name, email, category, checked_in_at, roster_entry_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (ticket_id) DO NOTHING`,
-      [ticketId, record.name, record.email, record.category, record.checkedInAt]
+      [ticketId, record.name, record.email, record.category, record.checkedInAt, record.rosterEntryId || null]
     );
   } else {
     saveJSON(CHECKINS_PATH, checkedIn);
@@ -148,8 +154,8 @@ async function persistRosterCategory(category, entries) {
       await client.query('DELETE FROM roster WHERE category = $1', [category]);
       for (const e of entries) {
         await client.query(
-          'INSERT INTO roster (category, name, email, code, order_id) VALUES ($1, $2, $3, $4, $5)',
-          [category, e.name, e.email, e.code, e.orderId]
+          'INSERT INTO roster (entry_id, category, name, email, code, order_id) VALUES ($1, $2, $3, $4, $5, $6)',
+          [e.entryId, category, e.name, e.email, e.code, e.orderId]
         );
       }
       await client.query('COMMIT');
@@ -214,6 +220,23 @@ function findColumn(headers, candidates) {
   return -1;
 }
 
+function findCollisions(newEntries, category) {
+  const others = roster.entries.filter((e) => e.category !== category);
+  const collisions = [];
+  for (const e of newEntries) {
+    const match = others.find((o) =>
+      (e.orderId && normalize(o.orderId) === normalize(e.orderId)) ||
+      (e.code && normalize(o.code) === normalize(e.code)) ||
+      (e.email && normalize(o.email) === normalize(e.email)) ||
+      (e.name && normalize(o.name) === normalize(e.name))
+    );
+    if (match) {
+      collisions.push(`${e.name || e.email || e.orderId} is already listed under "${match.category}" — this upload moves them to "${category}".`);
+    }
+  }
+  return collisions;
+}
+
 async function addCategoryFromCSV(category, csvText) {
   const rows = parseCSV(csvText);
   if (!rows.length) return { added: 0, error: 'No rows found in CSV.' };
@@ -236,22 +259,24 @@ async function addCategoryFromCSV(category, csvText) {
     const code = codeCol !== -1 ? (r[codeCol] || '').trim() : '';
     const orderId = orderIdCol !== -1 ? (r[orderIdCol] || '').trim() : '';
     if (!name && !email && !code && !orderId) continue;
-    entries.push({ category, name, email, code, orderId });
+    entries.push({ entryId: crypto.randomUUID(), category, name, email, code, orderId });
   }
 
+  const warnings = findCollisions(entries, category);
   await persistRosterCategory(category, entries);
-  return { added: entries.length };
+  return { added: entries.length, warnings };
 }
 
 const DEFAULT_CATEGORY = 'Delegate';
 
-function lookupCategory(ticket) {
-  const byOrderId = ticket.orderId && roster.byOrderId[normalize(ticket.orderId)];
-  const byCode = ticket.ticketShortId && roster.byCode[normalize(ticket.ticketShortId)];
-  const byEmail = ticket.attendeeEmail && roster.byEmail[normalize(ticket.attendeeEmail)];
-  const byName = ticket.attendeeName && roster.byName[normalize(ticket.attendeeName)];
-  const match = byOrderId || byCode || byEmail || byName;
-  return match ? match.category : DEFAULT_CATEGORY;
+function findRosterMatch(ticket) {
+  return (
+    (ticket.orderId && roster.byOrderId[normalize(ticket.orderId)]) ||
+    (ticket.ticketShortId && roster.byCode[normalize(ticket.ticketShortId)]) ||
+    (ticket.attendeeEmail && roster.byEmail[normalize(ticket.attendeeEmail)]) ||
+    (ticket.attendeeName && roster.byName[normalize(ticket.attendeeName)]) ||
+    null
+  );
 }
 
 function requireAdmin(req, res, next) {
@@ -264,16 +289,18 @@ function requireAdmin(req, res, next) {
 // scanned) into one list: every roster guest, plus anyone who got scanned but
 // wasn't found on any uploaded sheet (i.e. real Delegates, category defaulted
 // at scan time). Used by both the live /status page and the CSV export.
+//
+// Matching is by the exact roster entryId captured at scan time (not a fresh
+// name/email re-comparison), so a guest whose sheet name/email differs
+// slightly from their actual ticket still shows correctly as checked in.
 function getFullReport() {
-  const claimedIds = new Set();
+  const checkedInByEntryId = {};
+  for (const c of Object.values(checkedIn)) {
+    if (c.rosterEntryId) checkedInByEntryId[c.rosterEntryId] = c;
+  }
 
   const rosterRows = roster.entries.map((entry) => {
-    const matchPair = Object.entries(checkedIn).find(([, c]) =>
-      (entry.email && normalize(c.email) === normalize(entry.email)) ||
-      (entry.name && normalize(c.name) === normalize(entry.name))
-    );
-    if (matchPair) claimedIds.add(matchPair[0]);
-    const c = matchPair ? matchPair[1] : null;
+    const c = entry.entryId ? checkedInByEntryId[entry.entryId] : null;
     return {
       name: entry.name,
       email: entry.email,
@@ -285,9 +312,9 @@ function getFullReport() {
     };
   });
 
-  const walkInRows = Object.entries(checkedIn)
-    .filter(([id]) => !claimedIds.has(id))
-    .map(([, c]) => ({
+  const walkInRows = Object.values(checkedIn)
+    .filter((c) => !c.rosterEntryId)
+    .map((c) => ({
       name: c.name,
       email: c.email || '',
       category: c.category || DEFAULT_CATEGORY,
@@ -345,12 +372,13 @@ app.post('/api/checkin', async (req, res) => {
 
     const name = ticket?.attendeeName || ticket?.customerName || 'Ticket holder';
     const email = ticket?.attendeeEmail || ticket?.customerEmail;
-    const category = lookupCategory({
+    const match = findRosterMatch({
       orderId: ticket?.orderId,
       ticketShortId: ticket?.ticketShortId,
       attendeeEmail: email,
       attendeeName: name,
     });
+    const category = match ? match.category : DEFAULT_CATEGORY;
     const existing = checkedIn[ticket.id];
 
     const result = {
@@ -368,7 +396,11 @@ app.post('/api/checkin', async (req, res) => {
     };
 
     if (!existing) {
-      await persistCheckIn(ticket.id, { name, email, category, checkedInAt: result.ticket.checkedInAt });
+      await persistCheckIn(ticket.id, {
+        name, email, category,
+        checkedInAt: result.ticket.checkedInAt,
+        rosterEntryId: match ? match.entryId : null,
+      });
     }
 
     recentCheckIns.unshift({ ...result.ticket, alreadyCheckedIn: result.alreadyCheckedIn });
@@ -404,7 +436,7 @@ app.post('/api/admin/roster', requireAdmin, async (req, res) => {
   try {
     const result = await addCategoryFromCSV(category.trim(), csv);
     if (result.error) return res.status(400).json({ ok: false, message: result.error });
-    res.json({ ok: true, added: result.added, category: category.trim() });
+    res.json({ ok: true, added: result.added, category: category.trim(), warnings: result.warnings || [] });
   } catch (err) {
     console.error('Error saving roster:', err);
     res.status(500).json({ ok: false, message: 'Could not save roster.' });
