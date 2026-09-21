@@ -251,6 +251,22 @@ async function addCategoryFromCSV(category, csvText) {
     return { added: 0, error: 'Could not find an order ID, name, email, or ticket code column in the CSV header row.' };
   }
 
+  // Re-uploading a category (e.g. to fix a typo or add late guests) replaces
+  // its rows — but anyone already checked in from the OLD version is linked
+  // by entryId, so we carry that id forward for any row that still matches
+  // (by order id/code/email/name) rather than minting a fresh id for
+  // everyone, which would silently orphan already-checked-in guests.
+  const previousEntries = roster.entries.filter((e) => e.category === category);
+  function findPreviousEntryId(row) {
+    const match = previousEntries.find((p) =>
+      (row.orderId && normalize(p.orderId) === normalize(row.orderId)) ||
+      (row.code && normalize(p.code) === normalize(row.code)) ||
+      (row.email && normalize(p.email) === normalize(row.email)) ||
+      (row.name && normalize(p.name) === normalize(row.name))
+    );
+    return match ? match.entryId : crypto.randomUUID();
+  }
+
   const entries = [];
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
@@ -259,7 +275,8 @@ async function addCategoryFromCSV(category, csvText) {
     const code = codeCol !== -1 ? (r[codeCol] || '').trim() : '';
     const orderId = orderIdCol !== -1 ? (r[orderIdCol] || '').trim() : '';
     if (!name && !email && !code && !orderId) continue;
-    entries.push({ entryId: crypto.randomUUID(), category, name, email, code, orderId });
+    const row = { category, name, email, code, orderId };
+    entries.push({ ...row, entryId: findPreviousEntryId(row) });
   }
 
   const warnings = findCollisions(entries, category);
@@ -294,6 +311,7 @@ function requireAdmin(req, res, next) {
 // name/email re-comparison), so a guest whose sheet name/email differs
 // slightly from their actual ticket still shows correctly as checked in.
 function getFullReport() {
+  const validEntryIds = new Set(roster.entries.map((e) => e.entryId).filter(Boolean));
   const checkedInByEntryId = {};
   for (const c of Object.values(checkedIn)) {
     if (c.rosterEntryId) checkedInByEntryId[c.rosterEntryId] = c;
@@ -312,8 +330,11 @@ function getFullReport() {
     };
   });
 
+  // Anyone checked in whose roster link is missing entirely, OR points at an
+  // entry that no longer exists (e.g. removed in a later re-upload of that
+  // category) — surfaced here instead of silently disappearing from the report.
   const walkInRows = Object.values(checkedIn)
-    .filter((c) => !c.rosterEntryId)
+    .filter((c) => !c.rosterEntryId || !validEntryIds.has(c.rosterEntryId))
     .map((c) => ({
       name: c.name,
       email: c.email || '',
