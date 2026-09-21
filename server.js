@@ -227,8 +227,7 @@ function findCollisions(newEntries, category) {
     const match = others.find((o) =>
       (e.orderId && normalize(o.orderId) === normalize(e.orderId)) ||
       (e.code && normalize(o.code) === normalize(e.code)) ||
-      (e.email && normalize(o.email) === normalize(e.email)) ||
-      (e.name && normalize(o.name) === normalize(e.name))
+      (e.email && normalize(o.email) === normalize(e.email))
     );
     if (match) {
       collisions.push(`${e.name || e.email || e.orderId} is already listed under "${match.category}" — this upload moves them to "${category}".`);
@@ -261,8 +260,7 @@ async function addCategoryFromCSV(category, csvText) {
     const match = previousEntries.find((p) =>
       (row.orderId && normalize(p.orderId) === normalize(row.orderId)) ||
       (row.code && normalize(p.code) === normalize(row.code)) ||
-      (row.email && normalize(p.email) === normalize(row.email)) ||
-      (row.name && normalize(p.name) === normalize(row.name))
+      (row.email && normalize(p.email) === normalize(row.email))
     );
     return match ? match.entryId : crypto.randomUUID();
   }
@@ -291,7 +289,6 @@ function findRosterMatch(ticket) {
     (ticket.orderId && roster.byOrderId[normalize(ticket.orderId)]) ||
     (ticket.ticketShortId && roster.byCode[normalize(ticket.ticketShortId)]) ||
     (ticket.attendeeEmail && roster.byEmail[normalize(ticket.attendeeEmail)]) ||
-    (ticket.attendeeName && roster.byName[normalize(ticket.attendeeName)]) ||
     null
   );
 }
