@@ -157,6 +157,34 @@
   }
   #log-toggle:focus-visible { outline: 2px solid var(--go); outline-offset: 2px; }
 
+  .topnav {
+    padding: 14px 16px 4px;
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    max-width: 560px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .topnav a {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--ink);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 18px;
+    border-radius: 999px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+  }
+  .topnav a:hover, .topnav a:focus-visible {
+    border-color: var(--ink-dim);
+    outline: none;
+  }
+  .topnav a svg { width: 16px; height: 16px; flex: none; }
+
   #log {
     display: none;
     flex-direction: column;
@@ -194,6 +222,17 @@
   <div class="tally">Checked in today: <b id="tally-count">0</b></div>
 </header>
 
+<nav class="topnav">
+  <a href="/admin.html">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10M18 20V4M6 20v-4"/></svg>
+    Upload roster
+  </a>
+  <a href="/status.html">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+    Check-in status
+  </a>
+</nav>
+
 <main>
   <div id="reader-wrap">
     <div id="reader"></div>
@@ -219,6 +258,14 @@
   let checkedInToday = 0;
   let busy = false;
   let resumeTimer = null;
+
+  // Restore the real count on load/refresh so staff never see a misleading "0"
+  // after their phone reloads the page — the actual check-in data was never lost,
+  // only this on-screen counter would otherwise reset.
+  fetch('/api/checkin-count')
+    .then((r) => r.json())
+    .then((data) => { if (data.ok) { checkedInToday = data.count; tallyEl.textContent = String(checkedInToday); } })
+    .catch(() => {});
 
   logToggle.addEventListener('click', () => {
     const open = logEl.classList.toggle('show');
@@ -285,15 +332,16 @@
 
       if (data.ok && data.ticket) {
         const t = data.ticket;
-        const already = t.checkInCount > 1;
+        const already = data.alreadyCheckedIn;
         const name = t.attendeeName || t.attendeeEmail || 'Ticket holder';
+        const nameLine = name + ' - ' + (t.category || 'Delegate');
+        const ticketLine = 'TICKET - ' + (t.ticketShortId || '—');
 
         if (already) {
-          setResult('warn', 'Already checked in', name,
-            t.latestCheckIn ? 'First scanned ' + new Date(t.latestCheckIn.checkedInAt).toLocaleTimeString() : '');
+          setResult('warn', 'Already checked in', nameLine, ticketLine);
           addLogRow('warn', name + ' (dup)', timeNow());
         } else {
-          setResult('go', 'Welcome', name, t.ticketTypeId || '');
+          setResult('go', 'Welcome', nameLine, ticketLine);
           checkedInToday += 1;
           tallyEl.textContent = String(checkedInToday);
           addLogRow('go', name, timeNow());

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>WSW Roster Admin</title>
+<style>
+  :root {
+    --ink: #f2efe9; --ink-dim: #a8a39a; --ground: #17181a; --panel: #1f2123;
+    --line: #2c2e30; --go: #3ecf8e; --stop: #ef6a5f;
+    --mono: 'SFMono-Regular', Consolas, Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--sans); }
+  body { padding: env(safe-area-inset-top,0px) 16px env(safe-area-inset-bottom,0px); max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 20px 0 4px; }
+  p.sub { color: var(--ink-dim); font-size: 13px; margin: 0 0 20px; }
+  label { display: block; font-size: 13px; color: var(--ink-dim); margin: 14px 0 6px; }
+  input[type=text], input[type=password], textarea {
+    width: 100%; background: var(--panel); border: 1px solid var(--line); color: var(--ink);
+    border-radius: 8px; padding: 10px 12px; font-family: var(--sans); font-size: 14px;
+  }
+  textarea { font-family: var(--mono); font-size: 12px; min-height: 140px; resize: vertical; }
+  button {
+    margin-top: 16px; background: var(--go); color: #0b1f16; border: none; border-radius: 8px;
+    padding: 11px 16px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #msg { margin-top: 14px; font-size: 13px; }
+  #msg.ok { color: var(--go); }
+  #msg.err { color: var(--stop); }
+  .summary { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 16px; }
+  .summary h2 { font-size: 14px; color: var(--ink-dim); font-weight: 600; margin: 0 0 10px; }
+  .row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; font-family: var(--mono); }
+  a { color: var(--go); }
+  .topnav { display: flex; gap: 10px; margin: 16px 0 4px; }
+  .topnav a {
+    display: flex; align-items: center; gap: 7px; color: var(--ink); text-decoration: none;
+    font-size: 14px; font-weight: 600; padding: 10px 18px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--line);
+  }
+  .topnav a:hover, .topnav a:focus-visible { border-color: var(--ink-dim); outline: none; }
+  .topnav a svg { width: 16px; height: 16px; flex: none; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+    Scanner
+  </a>
+  <a href="/status.html">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+    Check-in status
+  </a>
+</nav>
+
+<h1>WSW roster upload</h1>
+<p class="sub">In Google Sheets, open one category's tab, File → Download → Comma Separated Values. Open that file, copy all the text, and paste it below. Repeat once per tab.</p>
+
+<label for="adminKey">Admin key</label>
+<input type="password" id="adminKey" autocomplete="off" placeholder="Ask whoever set this up" />
+
+<label for="category">Category name (e.g. VIP, Advisor, Media)</label>
+<input type="text" id="category" placeholder="VIP" />
+
+<label for="csv">Pasted CSV</label>
+<textarea id="csv" placeholder="name,email,ticket code&#10;Alya Mahmood Abbas,systems@get-playbook.com,F1MAO3Q4"></textarea>
+
+<button id="submit">Upload this category</button>
+<div id="msg"></div>
+
+<div class="summary">
+  <h2>Current roster</h2>
+  <div id="summaryRows">—</div>
+</div>
+
+
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const savedKey = sessionStorage.getItem('wsw_admin_key');
+  if (savedKey) $('adminKey').value = savedKey;
+
+  async function loadSummary() {
+    const key = $('adminKey').value.trim();
+    if (!key) return;
+    try {
+      const res = await fetch('/api/admin/roster-summary?key=' + encodeURIComponent(key));
+      const data = await res.json();
+      if (!data.ok) { $('summaryRows').textContent = 'Enter a valid admin key to view.'; return; }
+      const rows = Object.entries(data.categories);
+      $('summaryRows').innerHTML = rows.length
+        ? rows.map(([cat, count]) => `<div class="row"><span>${cat}</span><span>${count}</span></div>`).join('')
+        : 'No categories uploaded yet.';
+    } catch {
+      $('summaryRows').textContent = 'Could not load summary.';
+    }
+  }
+
+  $('submit').addEventListener('click', async () => {
+    const key = $('adminKey').value.trim();
+    const category = $('category').value.trim();
+    const csv = $('csv').value;
+    const msg = $('msg');
+
+    if (!key || !category || !csv.trim()) {
+      msg.className = 'err';
+      msg.textContent = 'Fill in the admin key, category name, and CSV text.';
+      return;
+    }
+
+    sessionStorage.setItem('wsw_admin_key', key);
+    $('submit').disabled = true;
+    msg.className = '';
+    msg.textContent = 'Uploading…';
+
+    try {
+      const res = await fetch('/api/admin/roster', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-key': key },
+        body: JSON.stringify({ category, csv }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        msg.className = 'ok';
+        msg.textContent = `Added ${data.added} people to "${data.category}".`;
+        $('csv').value = '';
+        loadSummary();
+      } else {
+        msg.className = 'err';
+        msg.textContent = data.message || 'Upload failed.';
+      }
+    } catch {
+      msg.className = 'err';
+      msg.textContent = 'Could not reach the server.';
+    }
+    $('submit').disabled = false;
+  });
+
+  $('adminKey').addEventListener('change', loadSummary);
+  loadSummary();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>WSW Check-in Status</title>
+<style>
+  :root {
+    --ink: #f2efe9; --ink-dim: #a8a39a; --ground: #17181a; --panel: #1f2123;
+    --line: #2c2e30; --go: #3ecf8e; --stop: #ef6a5f;
+    --mono: 'SFMono-Regular', Consolas, Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--sans); }
+  body { padding: env(safe-area-inset-top,0px) 16px 24px; max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 20px 0 14px; }
+  input[type=password], input[type=text] {
+    width: 100%; background: var(--panel); border: 1px solid var(--line); color: var(--ink);
+    border-radius: 8px; padding: 10px 12px; font-family: var(--sans); font-size: 14px; margin-bottom: 10px;
+  }
+  .tally { display: flex; gap: 16px; margin: 14px 0; font-size: 13px; color: var(--ink-dim); flex-wrap: wrap; align-items: center; }
+  .tally b { color: var(--ink); font-family: var(--mono); }
+  .export-btn {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+    background: var(--go); color: #0b1f16; text-decoration: none; font-weight: 600;
+    font-size: 13px; padding: 8px 14px; border-radius: 999px;
+  }
+  .export-btn svg { width: 14px; height: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--ink-dim); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--ground); }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  .yes { color: var(--go); font-weight: 600; }
+  .no { color: var(--ink-dim); }
+  .table-wrap { overflow-x: auto; }
+  a { color: var(--go); font-size: 13px; }
+  .topnav { display: flex; gap: 10px; margin: 16px 0 4px; }
+  .topnav a {
+    display: flex; align-items: center; gap: 7px; color: var(--ink); text-decoration: none;
+    font-size: 14px; font-weight: 600; padding: 10px 18px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--line);
+  }
+  .topnav a:hover, .topnav a:focus-visible { border-color: var(--ink-dim); outline: none; }
+  .topnav a svg { width: 16px; height: 16px; flex: none; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+    Scanner
+  </a>
+  <a href="/admin.html">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10M18 20V4M6 20v-4"/></svg>
+    Upload roster
+  </a>
+</nav>
+
+<h1>WSW check-in status</h1>
+<input type="password" id="adminKey" placeholder="Admin key" autocomplete="off" />
+<input type="text" id="search" placeholder="Search name, email, category…" />
+
+<div class="tally" id="tally"></div>
+<a class="export-btn" id="exportBtn" href="#">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+  Export CSV
+</a>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Name</th><th>Category</th><th>Checked in</th><th>Time</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+</div>
+
+
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let allRows = [];
+
+  const savedKey = sessionStorage.getItem('wsw_admin_key');
+  if (savedKey) $('adminKey').value = savedKey;
+
+  async function load() {
+    const key = $('adminKey').value.trim();
+    if (!key) return;
+    sessionStorage.setItem('wsw_admin_key', key);
+    $('exportBtn').href = '/api/admin/export?key=' + encodeURIComponent(key);
+    try {
+      const res = await fetch('/api/status?key=' + encodeURIComponent(key));
+      const data = await res.json();
+      if (!data.ok) { $('rows').innerHTML = '<tr><td colspan="4">Invalid admin key.</td></tr>'; return; }
+      allRows = data.rows;
+      render();
+    } catch {
+      $('rows').innerHTML = '<tr><td colspan="4">Could not load status.</td></tr>';
+    }
+  }
+
+  function render() {
+    const q = $('search').value.trim().toLowerCase();
+    const filtered = q
+      ? allRows.filter((r) => (r.name + r.email + r.category).toLowerCase().includes(q))
+      : allRows;
+
+    const checkedInCount = allRows.filter((r) => r.checkedIn).length;
+    $('tally').innerHTML =
+      `<span>Total roster: <b>${allRows.length}</b></span>` +
+      `<span>Checked in: <b>${checkedInCount}</b></span>` +
+      `<span>Remaining: <b>${allRows.length - checkedInCount}</b></span>`;
+
+    $('rows').innerHTML = filtered
+      .sort((a, b) => (a.checkedIn === b.checkedIn ? a.name.localeCompare(b.name) : a.checkedIn ? -1 : 1))
+      .map((r) => `
+        <tr>
+          <td>${escapeHtml(r.name || r.email || '—')}</td>
+          <td>${escapeHtml(r.category)}</td>
+          <td class="${r.checkedIn ? 'yes' : 'no'}">${r.checkedIn ? 'Yes' : 'No'}</td>
+          <td>${r.checkedInAt ? new Date(r.checkedInAt).toLocaleTimeString() : ''}</td>
+        </tr>
+      `).join('');
+  }
+
+  function escapeHtml(s) {
+    return (s || '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  $('adminKey').addEventListener('change', load);
+  $('search').addEventListener('input', render);
+  load();
+  setInterval(load, 15000); // keep it live during the event
+</script>
+
+</body>
+</html>
