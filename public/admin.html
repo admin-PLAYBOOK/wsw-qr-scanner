@@ -22,6 +22,14 @@
     border-radius: 8px; padding: 10px 12px; font-family: var(--sans); font-size: 14px;
   }
   textarea { font-family: var(--mono); font-size: 12px; min-height: 140px; resize: vertical; }
+  .dropzone {
+    border: 2px dashed var(--line); border-radius: 10px; padding: 24px 16px; text-align: center;
+    cursor: pointer; transition: border-color 120ms ease, background-color 120ms ease;
+  }
+  .dropzone:hover, .dropzone.drag { border-color: var(--go); background: rgba(62,207,142,0.06); }
+  .dropzone input[type=file] { display: none; }
+  .dropzone .hint { color: var(--ink-dim); font-size: 13px; }
+  .dropzone .filename { color: var(--go); font-size: 14px; font-weight: 600; margin-top: 6px; }
   button {
     margin-top: 16px; background: var(--go); color: #0b1f16; border: none; border-radius: 8px;
     padding: 11px 16px; font-size: 14px; font-weight: 600; cursor: pointer;
@@ -58,7 +66,7 @@
 </nav>
 
 <h1>WSW roster upload</h1>
-<p class="sub">In Google Sheets, open one category's tab, File → Download → Comma Separated Values. Open that file, copy all the text, and paste it below. Repeat once per tab.</p>
+<p class="sub">In Google Sheets, open one category's tab, File → Download → Comma Separated Values. Then select that downloaded file below. Repeat once per tab.</p>
 
 <label for="adminKey">Admin key</label>
 <input type="password" id="adminKey" autocomplete="off" placeholder="Ask whoever set this up" />
@@ -66,8 +74,12 @@
 <label for="category">Category name (e.g. VIP, Advisor, Media)</label>
 <input type="text" id="category" placeholder="VIP" />
 
-<label for="csv">Pasted CSV</label>
-<textarea id="csv" placeholder="name,email,ticket code&#10;Alya Mahmood Abbas,systems@get-playbook.com,F1MAO3Q4"></textarea>
+<label for="csvFile">Roster CSV</label>
+<div class="dropzone" id="dropzone">
+  <div class="hint">Tap to choose a CSV file, or drag one here</div>
+  <div class="filename" id="filename"></div>
+  <input type="file" id="csvFile" accept=".csv,text/csv" />
+</div>
 
 <button id="submit">Upload this category</button>
 <div id="msg"></div>
@@ -83,6 +95,45 @@
   const $ = (id) => document.getElementById(id);
   const savedKey = sessionStorage.getItem('wsw_admin_key');
   if (savedKey) $('adminKey').value = savedKey;
+
+  let selectedFile = null;
+
+  function setFile(file) {
+    if (!file) return;
+    if (!/\.csv$/i.test(file.name) && file.type !== 'text/csv') {
+      $('msg').className = 'err';
+      $('msg').textContent = 'That doesn\'t look like a .csv file.';
+      return;
+    }
+    selectedFile = file;
+    $('filename').textContent = file.name;
+    $('msg').textContent = '';
+
+    // Auto-fill the category from the filename (e.g. "VIP.csv" → "VIP") if empty.
+    if (!$('category').value.trim()) {
+      $('category').value = file.name.replace(/\.csv$/i, '').replace(/[_-]+/g, ' ').trim();
+    }
+  }
+
+  $('dropzone').addEventListener('click', () => $('csvFile').click());
+  $('csvFile').addEventListener('change', (e) => setFile(e.target.files[0]));
+
+  ['dragover', 'dragenter'].forEach((evt) =>
+    $('dropzone').addEventListener(evt, (e) => { e.preventDefault(); $('dropzone').classList.add('drag'); })
+  );
+  ['dragleave', 'drop'].forEach((evt) =>
+    $('dropzone').addEventListener(evt, (e) => { e.preventDefault(); $('dropzone').classList.remove('drag'); })
+  );
+  $('dropzone').addEventListener('drop', (e) => setFile(e.dataTransfer.files[0]));
+
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(file);
+    });
+  }
 
   async function loadSummary() {
     const key = $('adminKey').value.trim();
@@ -103,12 +154,11 @@
   $('submit').addEventListener('click', async () => {
     const key = $('adminKey').value.trim();
     const category = $('category').value.trim();
-    const csv = $('csv').value;
     const msg = $('msg');
 
-    if (!key || !category || !csv.trim()) {
+    if (!key || !category || !selectedFile) {
       msg.className = 'err';
-      msg.textContent = 'Fill in the admin key, category name, and CSV text.';
+      msg.textContent = 'Fill in the admin key, category name, and choose a CSV file.';
       return;
     }
 
@@ -118,6 +168,7 @@
     msg.textContent = 'Uploading…';
 
     try {
+      const csv = await readFileAsText(selectedFile);
       const res = await fetch('/api/admin/roster', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-admin-key': key },
@@ -127,7 +178,10 @@
       if (data.ok) {
         msg.className = 'ok';
         msg.textContent = `Added ${data.added} people to "${data.category}".`;
-        $('csv').value = '';
+        selectedFile = null;
+        $('filename').textContent = '';
+        $('csvFile').value = '';
+        $('category').value = '';
         loadSummary();
       } else {
         msg.className = 'err';
@@ -135,7 +189,7 @@
       }
     } catch {
       msg.className = 'err';
-      msg.textContent = 'Could not reach the server.';
+      msg.textContent = 'Could not read that file or reach the server.';
     }
     $('submit').disabled = false;
   });
